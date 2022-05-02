@@ -17,12 +17,25 @@ class NineAnimeProvider : MainAPI() {
     override val hasDownloadSupport = true
     override val supportedTypes = setOf(TvType.Anime)
 
+    companion object {
+        fun getDubStatus(title: String): DubStatus {
+            return if (title.contains("(dub)", ignoreCase = true)) {
+                DubStatus.Dubbed
+            } else {
+                DubStatus.Subbed
+            }
+        }
+    }
+
     override suspend fun getMainPage(): HomePageResponse {
         val items = listOf(
             Pair("$mainUrl/ajax/home/widget?name=trending", "Trending"),
             Pair("$mainUrl/ajax/home/widget?name=updated_all", "All"),
             Pair("$mainUrl/ajax/home/widget?name=updated_sub&page=1", "Recently Updated (SUB)"),
-            Pair("$mainUrl/ajax/home/widget?name=updated_dub&page=1", "Recently Updated (DUB)"),
+            Pair(
+                "$mainUrl/ajax/home/widget?name=updated_dub&page=1",
+                "Recently Updated (DUB)(DUB)"
+            ),
             Pair(
                 "$mainUrl/ajax/home/widget?name=updated_chinese&page=1",
                 "Recently Updated (Chinese)"
@@ -32,22 +45,16 @@ class NineAnimeProvider : MainAPI() {
             val home = Jsoup.parse(
                 app.get(
                     url
-                ).mapped<Response>().html
+                ).parsed<Response>().html
             ).select("ul.anime-list li").map {
-                val title = it.selectFirst("a.name").text()
-                val link = it.selectFirst("a").attr("href")
-                val poster = it.selectFirst("a.poster img").attr("src")
-                AnimeSearchResponse(
-                    title,
-                    link,
-                    this.name,
-                    TvType.Anime,
-                    poster,
-                    null,
-                    if (title.contains("(DUB)") || title.contains("(Dub)")) EnumSet.of(
-                        DubStatus.Dubbed
-                    ) else EnumSet.of(DubStatus.Subbed),
-                )
+                val title = it.selectFirst("a.name")!!.text()
+                val link = it.selectFirst("a")!!.attr("href")
+                val poster = it.selectFirst("a.poster img")!!.attr("src")
+
+                newAnimeSearchResponse(title, link) {
+                    this.posterUrl = poster
+                    addDubStatus(getDubStatus(title))
+                }
             }
 
             HomePageList(name, home)
@@ -166,11 +173,11 @@ class NineAnimeProvider : MainAPI() {
         val url = "$mainUrl/filter?sort=title%3Aasc&keyword=$query"
 
         return app.get(url).document.select("ul.anime-list li").mapNotNull {
-            val title = it.selectFirst("a.name").text()
+            val title = it.selectFirst("a.name")!!.text()
             val href =
-                fixUrlNull(it.selectFirst("a").attr("href"))?.replace(Regex("(\\?ep=(\\d+)\$)"), "")
+                fixUrlNull(it.selectFirst("a")!!.attr("href"))?.replace(Regex("(\\?ep=(\\d+)\$)"), "")
                     ?: return@mapNotNull null
-            val image = it.selectFirst("a.poster img").attr("src")
+            val image = it.selectFirst("a.poster img")!!.attr("src")
             AnimeSearchResponse(
                 title,
                 href,
@@ -190,54 +197,50 @@ class NineAnimeProvider : MainAPI() {
     )
 
     override suspend fun load(url: String): LoadResponse? {
-        val doc = app.get(url).document
-        val animeid = doc.selectFirst("div.player-wrapper.watchpage").attr("data-id") ?: return null
+        val validUrl = url.replace("https://9anime.to", mainUrl)
+        val doc = app.get(validUrl).document
+        val animeid = doc.selectFirst("div.player-wrapper.watchpage")!!.attr("data-id") ?: return null
         val animeidencoded = encode(getVrf(animeid) ?: return null)
-        val poster = doc.selectFirst("aside.main div.thumb div img").attr("src")
-        val title = doc.selectFirst(".info .title").text()
-        val description = doc.selectFirst("div.info p").text().replace("Ver menos", "").trim()
+        val poster = doc.selectFirst("aside.main div.thumb div img")!!.attr("src")
+        val title = doc.selectFirst(".info .title")!!.text()
+        val description = doc.selectFirst("div.info p")!!.text().replace("Ver menos", "").trim()
         val episodes = Jsoup.parse(
             app.get(
                 "$mainUrl/ajax/anime/servers?ep=1&id=${animeid}&vrf=$animeidencoded&ep=8&episode=&token="
-            ).mapped<Response>().html
-        )?.select("ul.episodes li a")?.mapNotNull {
+            ).parsed<Response>().html
+        ).select("ul.episodes li a").mapNotNull {
             val link = it?.attr("href") ?: return@mapNotNull null
             val name = "Episode ${it.text()}"
             Episode(link, name)
-        } ?: return null
-
+        }
 
         val recommendations =
-            doc.select("div.container aside.main section div.body ul.anime-list li")?.mapNotNull { element ->
-                val recTitle = element.select("a.name").text() ?: return@mapNotNull null
-                val image = element.select("a.poster img")?.attr("src")
-                val recUrl = fixUrl(element.select("a").attr("href"))
-                AnimeSearchResponse(
-                    recTitle,
-                    fixUrl(recUrl),
-                    this.name,
-                    TvType.Anime,
-                    image,
-                    dubStatus =
-                    if (recTitle.contains("(DUB)") || recTitle.contains("(Dub)")) EnumSet.of(
-                        DubStatus.Dubbed
-                    ) else EnumSet.of(DubStatus.Subbed),
-                )
-            }
-        val infodoc = doc.selectFirst("div.info .meta .col1").text()
+            doc.select("div.container aside.main section div.body ul.anime-list li")
+                .mapNotNull { element ->
+                    val recTitle = element.select("a.name").text() ?: return@mapNotNull null
+                    val image = element.select("a.poster img").attr("src")
+                    val recUrl = fixUrl(element.select("a").attr("href"))
+                    newAnimeSearchResponse(recTitle, recUrl) {
+                        this.posterUrl = image
+                        addDubStatus(getDubStatus(recTitle))
+                    }
+                }
+
+        val infodoc = doc.selectFirst("div.info .meta .col1")!!.text()
         val tvType = if (infodoc.contains("Movie")) TvType.AnimeMovie else TvType.Anime
         val status =
             if (infodoc.contains("Completed")) ShowStatus.Completed
             else if (infodoc.contains("Airing")) ShowStatus.Ongoing
             else null
         val tags = doc.select("div.info .meta .col1 div:contains(Genre) a").map { it.text() }
-        return newAnimeLoadResponse(title, url, tvType) {
-            posterUrl = poster
-            addEpisodes(DubStatus.Subbed, episodes)
-            plot = description
+
+        return newAnimeLoadResponse(title, validUrl, tvType) {
+            this.posterUrl = poster
+            this.plot = description
             this.recommendations = recommendations
-            showStatus = status
+            this.showStatus = status
             this.tags = tags
+            addEpisodes(DubStatus.Subbed, episodes)
         }
     }
 
@@ -260,13 +263,14 @@ class NineAnimeProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val document = app.get(data).document
-        val animeid = document.selectFirst("div.player-wrapper.watchpage").attr("data-id") ?: return false
+        val animeid =
+            document.selectFirst("div.player-wrapper.watchpage")!!.attr("data-id") ?: return false
         val animeidencoded = encode(getVrf(animeid) ?: return false)
 
         Jsoup.parse(
             app.get(
                 "$mainUrl/ajax/anime/servers?&id=${animeid}&vrf=$animeidencoded&episode=&token="
-            ).mapped<Response>().html
+            ).parsed<Response>().html
         ).select("div.body").map { element ->
             val jsonregex = Regex("(\\{.+\\}.*$data)")
             val servers = jsonregex.find(element.toString())?.value?.replace(
@@ -287,7 +291,7 @@ class NineAnimeProvider : MainAPI() {
                         parseJson<Links>(epserver)
                     } else null)?.url?.let { it1 -> getLink(it1.replace("=", "")) }
                         ?.replace("/embed/", "/e/")
-                } catch (e : Exception) {
+                } catch (e: Exception) {
                     logError(e)
                     null
                 }

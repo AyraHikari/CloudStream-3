@@ -7,12 +7,11 @@ import com.lagradost.cloudstream3.LoadResponse.Companion.addAniListId
 import com.lagradost.cloudstream3.LoadResponse.Companion.addMalId
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.mvvm.suspendSafeApiCall
-import com.lagradost.cloudstream3.network.AppResponse
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.JsUnpacker
 import com.lagradost.cloudstream3.utils.getQualityFromName
+import com.lagradost.nicehttp.NiceResponse
 import org.jsoup.Jsoup
-import java.util.*
 import kotlin.math.pow
 
 class AnimePaheProvider : MainAPI() {
@@ -84,19 +83,14 @@ class AnimePaheProvider : MainAPI() {
             try {
                 val response = app.get(i.first).text
                 val episodes = mapper.readValue<AnimePaheLatestReleases>(response).data.map {
-
-                    AnimeSearchResponse(
+                    newAnimeSearchResponse(
                         it.animeTitle,
                         "https://pahe.win/a/${it.animeId}?slug=${it.animeTitle}",
-                        this.name,
-                        TvType.Anime,
-                        it.snapshot,
-                        null,
-                        EnumSet.of(DubStatus.Subbed),
-                        null,
-                        null,
-                        it.episode
-                    )
+                        fix = false
+                    ) {
+                        this.posterUrl = it.snapshot
+                        addDubStatus(DubStatus.Subbed, it.episode)
+                    }
                 }
 
                 items.add(HomePageList(i.second, episodes))
@@ -151,18 +145,14 @@ class AnimePaheProvider : MainAPI() {
         val data = req.let { mapper.readValue<AnimePaheSearch>(it) }
 
         return data.data.map {
-            AnimeSearchResponse(
+            newAnimeSearchResponse(
                 it.title,
                 "https://pahe.win/a/${it.id}?slug=${it.title}",
-                this.name,
-                TvType.Anime,
-                it.poster,
-                it.year,
-                EnumSet.of(DubStatus.Subbed),
-                null,
-                null,
-                it.episodes
-            )
+                fix = false
+            ) {
+                this.posterUrl = it.poster
+                addDubStatus(DubStatus.Subbed, it.episodes)
+            }
         }
     }
 
@@ -188,7 +178,6 @@ class AnimePaheProvider : MainAPI() {
         @JsonProperty("to") val to: Int,
         @JsonProperty("data") val data: List<AnimeData>
     )
-
 
     private suspend fun generateListOfEpisodes(link: String): ArrayList<Episode> {
         try {
@@ -253,7 +242,7 @@ class AnimePaheProvider : MainAPI() {
             val doc = Jsoup.parse(html)
 
             val japTitle = doc.selectFirst("h2.japanese")?.text()
-            val poster = doc.selectFirst(".anime-poster a").attr("href")
+            val poster = doc.selectFirst(".anime-poster a")?.attr("href")
 
             val tvType = doc.selectFirst("""a[href*="/anime/type/"]""")?.text()
 
@@ -274,7 +263,7 @@ class AnimePaheProvider : MainAPI() {
                     "completed" -> ShowStatus.Completed
                     else -> null
                 }
-            val synopsis = doc.selectFirst(".anime-synopsis").text()
+            val synopsis = doc.selectFirst(".anime-synopsis")?.text()
 
             var anilistId: Int? = null
             var malId: Int? = null
@@ -442,7 +431,7 @@ class AnimePaheProvider : MainAPI() {
         }
 
         var responseCode = 302
-        var adflyContent: AppResponse? = null
+        var adflyContent: NiceResponse? = null
         var tries = 0
 
         while (responseCode != 200 && tries < 20) {
@@ -492,7 +481,7 @@ class AnimePaheProvider : MainAPI() {
         val decrypted = decrypt(fullString, key, v1.toInt(), v2.toInt())
         val uri = KWIK_D_URL.find(decrypted)!!.destructured.component1()
         val tok = KWIK_D_TOKEN.find(decrypted)!!.destructured.component1()
-        var content: AppResponse? = null
+        var content: NiceResponse? = null
 
         var code = 419
         var tries = 0

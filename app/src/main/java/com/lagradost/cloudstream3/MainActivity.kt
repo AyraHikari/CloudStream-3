@@ -18,7 +18,7 @@ import androidx.navigation.NavDestination
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavOptions
-import androidx.navigation.findNavController
+import androidx.navigation.fragment.NavHostFragment
 import androidx.navigation.ui.setupWithNavController
 import androidx.preference.PreferenceManager
 import com.google.android.gms.cast.framework.*
@@ -34,8 +34,9 @@ import com.lagradost.cloudstream3.CommonActivity.onDialogDismissedEvent
 import com.lagradost.cloudstream3.CommonActivity.onUserLeaveHint
 import com.lagradost.cloudstream3.CommonActivity.showToast
 import com.lagradost.cloudstream3.CommonActivity.updateLocale
+import com.lagradost.cloudstream3.movieproviders.NginxProvider
 import com.lagradost.cloudstream3.mvvm.logError
-import com.lagradost.cloudstream3.network.Requests
+import com.lagradost.cloudstream3.network.initClient
 import com.lagradost.cloudstream3.receivers.VideoDownloadRestartReceiver
 import com.lagradost.cloudstream3.syncproviders.OAuth2API.Companion.OAuth2Apis
 import com.lagradost.cloudstream3.syncproviders.OAuth2API.Companion.OAuth2accountApis
@@ -55,6 +56,7 @@ import com.lagradost.cloudstream3.utils.Coroutines.main
 import com.lagradost.cloudstream3.utils.DataStore.getKey
 import com.lagradost.cloudstream3.utils.DataStore.removeKey
 import com.lagradost.cloudstream3.utils.DataStore.setKey
+import com.lagradost.cloudstream3.utils.DataStoreHelper.migrateResumeWatching
 import com.lagradost.cloudstream3.utils.DataStoreHelper.setViewPos
 import com.lagradost.cloudstream3.utils.InAppUpdater.Companion.runAutoUpdate
 import com.lagradost.cloudstream3.utils.UIHelper.changeStatusBarState
@@ -64,14 +66,13 @@ import com.lagradost.cloudstream3.utils.UIHelper.getResourceColor
 import com.lagradost.cloudstream3.utils.UIHelper.hideKeyboard
 import com.lagradost.cloudstream3.utils.UIHelper.navigate
 import com.lagradost.cloudstream3.utils.UIHelper.requestRW
-import com.lagradost.cloudstream3.movieproviders.NginxProvider
+import com.lagradost.nicehttp.Requests
 import kotlinx.android.synthetic.main.activity_main.*
 import kotlinx.android.synthetic.main.fragment_result_swipe.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import java.io.File
-import kotlin.collections.HashMap
 import kotlin.concurrent.thread
 
 
@@ -107,7 +108,9 @@ class MainActivity : AppCompatActivity(), ColorPickerDialogListener {
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
         updateLocale() // android fucks me by chaining lang when rotating the phone
-        findNavController(R.id.nav_host_fragment).currentDestination?.let { updateNavBar(it) }
+
+        val navHostFragment = supportFragmentManager.findFragmentById(R.id.nav_host_fragment) as NavHostFragment
+        navHostFragment.navController.currentDestination?.let { updateNavBar(it) }
     }
 
     private fun updateNavBar(destination: NavDestination) {
@@ -521,8 +524,9 @@ class MainActivity : AppCompatActivity(), ColorPickerDialogListener {
         setUpBackup()
 
         CommonActivity.init(this)
-
-        val navController = findNavController(R.id.nav_host_fragment)
+        val navHostFragment = supportFragmentManager.findFragmentById(R.id.nav_host_fragment) as NavHostFragment
+        val navController = navHostFragment.navController
+        //val navController = findNavController(R.id.nav_host_fragment)
 
         /*navOptions = NavOptions.Builder()
             .setLaunchSingleTop(true)
@@ -533,10 +537,10 @@ class MainActivity : AppCompatActivity(), ColorPickerDialogListener {
             .setPopUpTo(navController.graph.startDestination, false)
             .build()*/
         nav_view?.setupWithNavController(navController)
-        val navRail = findViewById<NavigationRailView?>(R.id.nav_rail_view)
-        navRail?.setupWithNavController(navController)
+        val nav_rail = findViewById<NavigationRailView?>(R.id.nav_rail_view)
+        nav_rail?.setupWithNavController(navController)
 
-        navRail?.setOnItemSelectedListener { item ->
+        nav_rail?.setOnItemSelectedListener { item ->
             onNavDestinationSelected(
                 item,
                 navController
@@ -574,7 +578,9 @@ class MainActivity : AppCompatActivity(), ColorPickerDialogListener {
 
         val rippleColor = ColorStateList.valueOf(getResourceColor(R.attr.colorPrimary, 0.1f))
         nav_view?.itemRippleColor = rippleColor
-        navRail?.itemRippleColor = rippleColor
+        nav_rail?.itemRippleColor = rippleColor
+        nav_rail?.itemActiveIndicatorColor = rippleColor
+        nav_view?.itemActiveIndicatorColor = rippleColor
 
         if (!checkWrite()) {
             requestRW()
@@ -675,6 +681,10 @@ class MainActivity : AppCompatActivity(), ColorPickerDialogListener {
             logError(e)
         }
         println("Loaded everything")
+
+        ioSafe {
+            migrateResumeWatching()
+        }
 /*
         val relativePath = (Environment.DIRECTORY_DOWNLOADS) + File.separatorChar
         val displayName = "output.dex" //""output.dex"

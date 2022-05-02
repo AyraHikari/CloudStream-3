@@ -33,6 +33,7 @@ import com.lagradost.cloudstream3.R
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.mvvm.logError
 import com.lagradost.cloudstream3.mvvm.normalSafeApiCall
+import com.lagradost.cloudstream3.network.initClient
 import com.lagradost.cloudstream3.syncproviders.AccountManager
 import com.lagradost.cloudstream3.syncproviders.OAuth2API
 import com.lagradost.cloudstream3.syncproviders.OAuth2API.Companion.aniListApi
@@ -47,8 +48,8 @@ import com.lagradost.cloudstream3.utils.InAppUpdater.Companion.runAutoUpdate
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.SingleSelectionHelper.showBottomDialog
 import com.lagradost.cloudstream3.utils.SingleSelectionHelper.showDialog
-import com.lagradost.cloudstream3.utils.SingleSelectionHelper.showNginxTextInputDialog
 import com.lagradost.cloudstream3.utils.SingleSelectionHelper.showMultiDialog
+import com.lagradost.cloudstream3.utils.SingleSelectionHelper.showNginxTextInputDialog
 import com.lagradost.cloudstream3.utils.SubtitleHelper
 import com.lagradost.cloudstream3.utils.SubtitleHelper.getFlagFromIso
 import com.lagradost.cloudstream3.utils.UIHelper.dismissSafe
@@ -684,8 +685,10 @@ class SettingsFragment : PreferenceFragmentCompat() {
         }
 
         getPref(R.string.quality_pref_key)?.setOnPreferenceClickListener {
-            val prefNames = resources.getStringArray(R.array.quality_pref)
-            val prefValues = resources.getIntArray(R.array.quality_pref_values)
+            val prefValues = Qualities.values().map { it.value }.reversed().toMutableList()
+            prefValues.remove(Qualities.Unknown.value)
+
+            val prefNames = prefValues.map { Qualities.getStringByInt(it) }
 
             val currentQuality =
                 settingsManager.getInt(
@@ -700,6 +703,24 @@ class SettingsFragment : PreferenceFragmentCompat() {
                 true,
                 {}) {
                 settingsManager.edit().putInt(getString(R.string.quality_pref_key), prefValues[it])
+                    .apply()
+            }
+            return@setOnPreferenceClickListener true
+        }
+
+        getPref(R.string.prefer_limit_title_key)?.setOnPreferenceClickListener {
+            val prefNames = resources.getStringArray(R.array.limit_title_pref_names)
+            val prefValues = resources.getIntArray(R.array.limit_title_pref_values)
+            val current = settingsManager.getInt(getString(R.string.prefer_limit_title_key), 0)
+
+            activity?.showBottomDialog(
+                prefNames.toList(),
+                prefValues.indexOf(current),
+                getString(R.string.limit_title),
+                true,
+                {}) {
+                settingsManager.edit()
+                    .putInt(getString(R.string.prefer_limit_title_key), prefValues[it])
                     .apply()
             }
             return@setOnPreferenceClickListener true
